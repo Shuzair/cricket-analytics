@@ -1,0 +1,47 @@
+# Environment variables (NEVER commit this)
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+ENV/
+.eggs/
+*.egg-info/
+dist/
+build/
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Data files (don't commit large data)
+data/*.csv
+data/*.json
+data/*.parquet
+*.csv
+*.xlsx
+!data/.gitkeep
+
+# Logs
+logs/
+*.log
+
+# Docker volumes (local data)
+postgres_data/
+
+# OS
+Thumbs.db
+.DS_Store

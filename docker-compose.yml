@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: cricket_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-cricket123}
+      POSTGRES_DB: ${DB_NAME:-cricket}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - cricket_data:/var/lib/postgresql/data
+      - ./sql/init:/docker-entrypoint-initdb.d  # Auto-run SQL files on first start
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  cricket_data:
+    name: cricket_postgres_data
