@@ -1,0 +1,10 @@
+# pgModeler Data Models
+# 
+# Save your .dbm files (pgModeler projects) in this folder.
+# These files are XML-based and track well in git.
+#
+# Workflow:
+# 1. Design your model in pgModeler
+# 2. Save as .dbm file in this folder
+# 3. Export SQL to sql/migrations/ folder
+# 4. Commit both the .dbm and .sql files

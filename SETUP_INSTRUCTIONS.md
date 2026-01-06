@@ -118,21 +118,32 @@ If not already installed:
 - Download from: https://www.docker.com/products/docker-desktop/
 - Install and start Docker Desktop
 
-### 5.3 Start PostgreSQL
+### 5.3 Start PostgreSQL and pgAdmin
 
 ```bash
 docker-compose up -d
 ```
 
-Verify it's running:
+Verify both are running:
 
 ```bash
 docker ps
 ```
 
-You should see `cricket_postgres` running.
+You should see two containers:
+- `cricket_postgres` - The database
+- `cricket_pgadmin` - The web GUI
 
-### 5.4 Set up Python virtual environment
+### 5.4 Access pgAdmin (Database GUI)
+
+1. Open your browser: **http://localhost:8080**
+2. Login with:
+   - **Email:** `admin@cricket.local`
+   - **Password:** `admin123`
+3. The "Cricket Database" is already configured in the left sidebar
+4. First time connecting: enter the database password `cricket123`
+
+### 5.5 Set up Python virtual environment
 
 ```bash
 # Create virtual environment
@@ -145,7 +156,7 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 5.5 Test everything
+### 5.6 Test everything
 
 ```bash
 # Test database connection
@@ -157,7 +168,36 @@ python src/pipelines/load_data.py
 
 ---
 
-## STEP 6: Open in VS Code
+## STEP 6: Install pgModeler (Visual Data Modeling)
+
+pgModeler lets you design your database visually with drag-and-drop ERD diagrams.
+
+### Mac (Homebrew - Recommended):
+```bash
+brew install --cask pgmodeler
+```
+
+### Mac (Manual):
+1. Download from https://pgmodeler.io/download
+2. Install the .dmg file
+
+### Configure pgModeler Connection:
+1. Open pgModeler
+2. Go to **File → Connections**
+3. Click **Add**
+4. Fill in:
+   - **Alias:** Cricket Local
+   - **Host:** localhost
+   - **Port:** 5432
+   - **User:** postgres
+   - **Password:** cricket123 (or your .env password)
+   - **Database:** cricket
+5. Click **Test Connection** → Should show success
+6. Save
+
+---
+
+## STEP 7: Open in VS Code
 
 ```bash
 code .
@@ -269,8 +309,18 @@ git config --list --local
 
 1. **core.sshCommand** tells this repo to use your personal SSH key
 2. **Local git config** keeps personal commits separate from company work
-3. **Docker** keeps PostgreSQL portable across machines
-4. **Virtual environment** keeps Python dependencies isolated
-5. **.env file** keeps secrets out of git
+3. **Docker** keeps PostgreSQL + pgAdmin portable across machines
+4. **pgModeler** for visual data modeling (saved to `models/` folder)
+5. **Virtual environment** keeps Python dependencies isolated
+6. **.env file** keeps secrets out of git
 
 This approach is repo-specific and won't affect your other projects!
+
+---
+
+## Next Steps
+
+📖 **Read the WORKFLOW_GUIDE.md** for detailed instructions on:
+- How to save pgAdmin work to git
+- How to use pgModeler effectively
+- The complete database development workflow
