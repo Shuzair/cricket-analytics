@@ -1,9 +1,9 @@
 # Database Workflow Guide
-## How to Save Your PostgreSQL Work to GitHub
+## How to Save Your PostgreSQL & DBeaver Work to GitHub
 
 This document explains the complete workflow for:
-1. Visual data modeling with pgModeler
-2. Saving pgAdmin work to git
+1. Visual data modeling with DBeaver
+2. Saving your database work to git
 3. Keeping everything version controlled
 
 ---
@@ -12,8 +12,8 @@ This document explains the complete workflow for:
 
 ```
 cricket-analytics/
-├── models/                    ← pgModeler .dbm files (✅ saved to git)
-│   └── cricket_model.dbm
+├── models/                    ← DBeaver ERD files (✅ saved to git)
+│   └── cricket_erd.png
 ├── sql/
 │   ├── init/                  ← Auto-run on DB start (✅ saved to git)
 │   ├── tables/                ← Table schemas (✅ saved to git)
@@ -27,108 +27,77 @@ cricket-analytics/
 
 ---
 
-## Part 1: pgModeler Setup
+## The Golden Rule
 
-### What is pgModeler?
-- Visual database design tool
-- Create tables, relationships by drag-and-drop
-- See your entire schema as an ERD (Entity Relationship Diagram)
-- Export to SQL
+**If it's not in a file in your project folder, it won't go to GitHub!**
 
-### Install pgModeler
-
-**Mac (Homebrew):**
-```bash
-brew install --cask pgmodeler
-```
-
-**Mac (Download):**
-1. Go to https://pgmodeler.io/download
-2. Download macOS version
-3. Install the .dmg file
-
-**Windows:**
-1. Go to https://pgmodeler.io/download
-2. Download Windows installer
-3. Run the installer
-
-**Linux:**
-```bash
-# Ubuntu/Debian
-sudo apt install pgmodeler
-
-# Or download from website
-```
-
-### Configure pgModeler Connection
-
-1. Open pgModeler
-2. Go to **File → Connections**
-3. Add new connection:
-   - **Alias:** Cricket Local
-   - **Host:** localhost
-   - **Port:** 5432
-   - **User:** postgres
-   - **Password:** cricket123
-   - **Database:** cricket
+When you create something in DBeaver (function, view, table), it lives in the database — NOT in your project folder. You must export it to a SQL file.
 
 ---
 
-## Part 2: pgModeler Workflow
+## Part 1: DBeaver ERD (Visual Data Modeling)
 
-### Creating a New Model
+### Creating an ERD from Existing Tables
 
-1. **File → New Model**
-2. Design your tables visually:
-   - Drag "Table" from left panel
+1. In DBeaver, expand: `cricket` → `Schemas` → `public` → `Tables`
+2. Select all tables you want (Ctrl+Click or Cmd+Click)
+3. Right-click → **View Diagram**
+4. Your ERD appears!
+
+### Creating a New ERD Design
+
+1. Right-click on `cricket` database
+2. **Create → ER Diagram**
+3. Name it (e.g., "Cricket Data Model")
+4. Drag tables from left panel onto canvas
+5. Or create new tables visually:
+   - Right-click on canvas → **Create New Table**
    - Add columns, set types, primary keys
-   - Draw relationships between tables
-3. **Save as:** `models/cricket_model.dbm`
+   - Draw relationships by dragging from one column to another
 
-### Exporting SQL from pgModeler
+### Saving ERD to Git
 
-1. Design your model
-2. **Export → Export to SQL file**
-3. Save to: `sql/migrations/004_from_pgmodeler.sql` (use next number)
-4. Review the generated SQL
-5. Apply to database:
-   ```bash
-   docker exec -i cricket_postgres psql -U postgres -d cricket < sql/migrations/004_from_pgmodeler.sql
-   ```
+**Option 1: Export as Image**
+1. In ERD view, click **File → Save As** or right-click → **Export**
+2. Save as PNG/SVG to: `models/cricket_erd.png`
+3. Good for documentation
 
-### Importing Existing Database into pgModeler
+**Option 2: Export as SQL (Recommended)**
+1. In ERD view, right-click → **Generate SQL**
+2. Save to: `sql/migrations/XXX_from_dbeaver.sql`
+3. This is the actual code that creates your tables
 
-1. **File → Import**
-2. Select your connection (Cricket Local)
-3. pgModeler will reverse-engineer your database into a visual model
-4. Save as: `models/cricket_model.dbm`
+**Option 3: Save DBeaver Project File**
+1. DBeaver saves `.erd` files in its workspace
+2. Find via: **Window → Preferences → General → Workspace**
+3. Copy `.erd` file to `models/` folder
 
-### pgModeler Git Workflow
+### ERD Git Workflow
 
 ```bash
-# After making changes in pgModeler:
+# After designing in DBeaver:
 
-# 1. Save your .dbm file in models/ folder
-# 2. Export SQL to sql/migrations/
+# 1. Export SQL to migrations folder
+# 2. Export image to models folder (optional, for docs)
 
-# 3. Commit both
-git add models/*.dbm
 git add sql/migrations/*.sql
-git commit -m "Update data model: added bowling_stats table"
+git add models/*.png
+git commit -m "Add new data model: player statistics"
 git push
 ```
 
 ---
 
-## Part 3: pgAdmin to Git Workflow
+## Part 2: Saving DBeaver SQL Work to Git
 
 ### The Problem
-When you create a function/view in pgAdmin, it only exists in the database.
+
+When you create a function/view in DBeaver, it only exists in the database.
 If you delete the Docker volume or move to another machine, it's **lost**.
 
 ### Solution: Export Script
 
-I've created a script that exports your database objects to SQL files:
+Use the included Python script to export database objects:
 
 ```bash
 # Activate Python environment first
@@ -147,11 +116,11 @@ python scripts/export_db_objects.py --function calculate_strike_rate
 python scripts/export_db_objects.py --view player_summary
 ```
 
-### Workflow A: Create in pgAdmin, Then Export
+### Workflow A: Create in DBeaver, Then Export
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  1. Create function/view in pgAdmin                             │
+│  1. Create function/view/table in DBeaver                       │
 │                    ↓                                            │
 │  2. Test it, make sure it works                                 │
 │                    ↓                                            │
@@ -169,13 +138,13 @@ python scripts/export_db_objects.py --view player_summary
 ┌─────────────────────────────────────────────────────────────────┐
 │  1. Create SQL file: sql/functions/my_function.sql              │
 │                    ↓                                            │
-│  2. Write your SQL in the file                                  │
+│  2. Write your SQL in the file (use VS Code or DBeaver editor)  │
 │                    ↓                                            │
-│  3. Apply to database:                                          │
-│     docker exec -i cricket_postgres psql -U postgres -d cricket │
-│       < sql/functions/my_function.sql                           │
+│  3. Run the file in DBeaver:                                    │
+│     - Open SQL file in DBeaver                                  │
+│     - Click Execute (Ctrl+Enter)                                │
 │                    ↓                                            │
-│  4. Test in pgAdmin                                             │
+│  4. Test in DBeaver                                             │
 │                    ↓                                            │
 │  5. git add . && git commit && git push                         │
 └─────────────────────────────────────────────────────────────────┘
@@ -186,9 +155,24 @@ python scripts/export_db_objects.py --view player_summary
 - No risk of forgetting to export
 - Easier to track changes in git history
 
+### Alternative: Export Directly from DBeaver
+
+You can also export SQL directly from DBeaver:
+
+**Export a single function/view:**
+1. In left panel, find your function under `cricket` → `Schemas` → `public` → `Functions`
+2. Right-click → **Generate SQL** → **DDL**
+3. Copy the SQL
+4. Paste into a file: `sql/functions/my_function.sql`
+
+**Export entire schema:**
+1. Right-click on `public` schema
+2. **Generate SQL** → **DDL**
+3. Save to `sql/schema_backup.sql`
+
 ---
 
-## Part 4: Daily Workflow Summary
+## Part 3: Daily Workflow Summary
 
 ### Starting Your Day
 
@@ -200,25 +184,26 @@ docker-compose up -d
 source venv/bin/activate
 
 # 3. Open tools
-open http://localhost:8080   # pgAdmin
-open -a pgModeler            # pgModeler (Mac)
-code .                       # VS Code
+open -a DBeaver       # Mac
+# Or just launch DBeaver from Applications
+
+code .                # VS Code
 ```
 
 ### When You Create Something New
 
 | Created in... | Save to git by... |
 |---------------|-------------------|
-| pgModeler | Save .dbm to `models/`, export SQL to `sql/migrations/` |
-| pgAdmin (function) | Run `python scripts/export_db_objects.py --functions` |
-| pgAdmin (view) | Run `python scripts/export_db_objects.py --views` |
-| pgAdmin (table) | Run `python scripts/export_db_objects.py --tables` |
+| DBeaver ERD | Export SQL → `sql/migrations/`, Image → `models/` |
+| DBeaver (function) | Run `python scripts/export_db_objects.py --functions` |
+| DBeaver (view) | Run `python scripts/export_db_objects.py --views` |
+| DBeaver (table) | Run `python scripts/export_db_objects.py --tables` |
 | SQL file directly | Already in git! Just commit. |
 
 ### Before Pushing to Git
 
 ```bash
-# Export any pgAdmin work to files
+# Export any DBeaver work to files
 python scripts/export_db_objects.py --all
 
 # Check what changed
@@ -257,12 +242,12 @@ for f in sql/views/*.sql; do
   docker exec -i cricket_postgres psql -U postgres -d cricket < "$f"
 done
 
-# 5. Open pgModeler and load models/cricket_model.dbm
+# 5. Open DBeaver and connect to see everything
 ```
 
 ---
 
-## Part 5: Folder Structure Explained
+## Part 4: Folder Structure Explained
 
 ```
 sql/
@@ -272,7 +257,7 @@ sql/
 │
 ├── migrations/            # Schema changes (run manually in order)
 │   ├── 003_add_bowling_stats.sql
-│   └── 004_from_pgmodeler.sql
+│   └── 004_from_dbeaver_erd.sql
 │
 ├── tables/                # Exported table definitions
 │   └── matches.sql
@@ -290,12 +275,13 @@ sql/
     └── audit_trigger.sql
 
 models/
-└── cricket_model.dbm      # pgModeler project file
+├── cricket_erd.png        # ERD diagram image (for documentation)
+└── cricket_model.erd      # DBeaver ERD project file (optional)
 ```
 
 ---
 
-## Quick Reference: Commands
+## Part 5: Quick Reference Commands
 
 ```bash
 # Export all DB objects to SQL files
@@ -304,25 +290,61 @@ python scripts/export_db_objects.py --all
 # Run a SQL file against database
 docker exec -i cricket_postgres psql -U postgres -d cricket < path/to/file.sql
 
+# Run SQL file from DBeaver:
+# Open file → Ctrl+Enter (or Cmd+Enter on Mac)
+
 # Connect to database CLI
 docker exec -it cricket_postgres psql -U postgres -d cricket
 
-# View what's in the database
+# View what's in the database (in psql)
 \dt          # List tables
 \df          # List functions
 \dv          # List views
 \d tablename # Describe table
+
+# Reset database (fresh start)
+docker-compose down -v
+docker-compose up -d
 ```
+
+---
+
+## Part 6: DBeaver Tips
+
+### Run SQL File
+1. Open `.sql` file in DBeaver
+2. Make sure connection is selected (top dropdown)
+3. Press `Ctrl+Enter` (Windows/Linux) or `Cmd+Enter` (Mac)
+
+### View Table Data
+1. Double-click on table in left panel
+2. Go to **Data** tab
+
+### Edit Table Structure
+1. Right-click table → **View Table** (or double-click)
+2. Go to **Properties** tab
+3. Modify columns, add constraints
+4. Click **Save** → DBeaver generates ALTER statements
+
+### Compare Databases
+1. **Database → Compare/Migrate**
+2. Useful for seeing differences between your local and a colleague's
+
+### Export Query Results
+1. Run a query
+2. Right-click on results → **Export Data**
+3. Choose format (CSV, Excel, SQL INSERTs, etc.)
 
 ---
 
 ## Summary
 
-| Tool | Purpose | Git Files |
-|------|---------|-----------|
-| **pgModeler** | Visual data modeling | `models/*.dbm` + `sql/migrations/*.sql` |
-| **pgAdmin** | Query, browse, quick edits | Export to `sql/` folder with script |
-| **SQL files** | Version-controlled source of truth | `sql/**/*.sql` |
-| **Python scripts** | Pipelines, data loading | `src/**/*.py` |
+| Task | Tool | Git Files |
+|------|------|-----------|
+| Visual data modeling | DBeaver ERD | `models/` + `sql/migrations/` |
+| Create functions/views | DBeaver SQL Editor | Export to `sql/` folder |
+| Browse data | DBeaver | N/A (data isn't in git) |
+| Run pipelines | Python | `src/**/*.py` |
+| Version control | Git | Everything in project folder |
 
-**Golden Rule:** If it's not in a file in your project folder, it won't go to GitHub!
+**Remember:** Database = temporary (in Docker). SQL files = permanent (in Git).

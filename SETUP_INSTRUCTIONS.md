@@ -118,32 +118,21 @@ If not already installed:
 - Download from: https://www.docker.com/products/docker-desktop/
 - Install and start Docker Desktop
 
-### 5.3 Start PostgreSQL and pgAdmin
+### 5.3 Start PostgreSQL
 
 ```bash
 docker-compose up -d
 ```
 
-Verify both are running:
+Verify it's running:
 
 ```bash
 docker ps
 ```
 
-You should see two containers:
-- `cricket_postgres` - The database
-- `cricket_pgadmin` - The web GUI
+You should see `cricket_postgres` running.
 
-### 5.4 Access pgAdmin (Database GUI)
-
-1. Open your browser: **http://localhost:8080**
-2. Login with:
-   - **Email:** `admin@cricket.local`
-   - **Password:** `admin123`
-3. The "Cricket Database" is already configured in the left sidebar
-4. First time connecting: enter the database password `cricket123`
-
-### 5.5 Set up Python virtual environment
+### 5.4 Set up Python virtual environment
 
 ```bash
 # Create virtual environment
@@ -156,48 +145,78 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 5.6 Test everything
+### 5.5 Test the connection
 
 ```bash
-# Test database connection
 python src/db/connection.py
-
-# Load sample data
-python src/pipelines/load_data.py
 ```
 
 ---
 
-## STEP 6: Install pgModeler (Visual Data Modeling)
+## STEP 6: Install DBeaver (Database GUI + Visual Modeling)
 
-pgModeler lets you design your database visually with drag-and-drop ERD diagrams.
+DBeaver is a free tool that lets you:
+- Browse and query your database (like pgAdmin)
+- Design tables visually with ERD diagrams (like pgModeler)
+- Works on Mac, Windows, and Linux
 
-### Mac (Homebrew - Recommended):
+### Mac:
 ```bash
-brew install --cask pgmodeler
+brew install --cask dbeaver-community
 ```
 
-### Mac (Manual):
-1. Download from https://pgmodeler.io/download
-2. Install the .dmg file
+### Windows:
+```powershell
+# Option 1: Chocolatey
+choco install dbeaver
 
-### Configure pgModeler Connection:
-1. Open pgModeler
-2. Go to **File → Connections**
-3. Click **Add**
+# Option 2: Winget (Windows 11)
+winget install dbeaver.dbeaver
+
+# Option 3: Download from https://dbeaver.io/download/
+```
+
+### Linux:
+```bash
+# Ubuntu/Debian (Snap)
+sudo snap install dbeaver-ce
+
+# Flatpak (any distro)
+flatpak install flathub io.dbeaver.DBeaverCommunity
+
+# Or download from https://dbeaver.io/download/
+```
+
+---
+
+## STEP 7: Configure DBeaver Connection
+
+1. Open DBeaver
+2. Click **Database → New Database Connection** (or the plug icon)
+3. Select **PostgreSQL** → Click **Next**
 4. Fill in:
-   - **Alias:** Cricket Local
    - **Host:** localhost
    - **Port:** 5432
-   - **User:** postgres
-   - **Password:** cricket123 (or your .env password)
    - **Database:** cricket
-5. Click **Test Connection** → Should show success
-6. Save
+   - **Username:** postgres
+   - **Password:** cricket123 (or your .env password)
+5. Click **Test Connection** → Should show "Connected"
+6. Click **Finish**
+
+### View ERD (Visual Data Model):
+1. In the left panel, expand your connection → `cricket` → `Schemas` → `public` → `Tables`
+2. Select the tables you want to visualize
+3. Right-click → **View Diagram** (or press F4)
+4. You'll see your tables with relationships!
+
+### Create New ERD:
+1. Right-click on `cricket` database → **Create → Other → ER Diagram**
+2. Drag tables from the left panel onto the canvas
+3. Design visually!
 
 ---
 
-## STEP 7: Open in VS Code
+## STEP 8: Open in VS Code
 
 ```bash
 code .
@@ -205,7 +224,6 @@ code .
 
 ### Recommended VS Code Extensions:
 - Python
-- PostgreSQL (by Chris Kolkman)
 - Docker
 - GitLens
 
@@ -220,9 +238,13 @@ docker-compose up -d
 # 2. Activate Python environment
 source venv/bin/activate
 
-# 3. Do your work...
+# 3. Open DBeaver for database work
 
-# 4. Commit and push
+# 4. Do your work...
+
+# 5. Export any DBeaver work to SQL files (see WORKFLOW_GUIDE.md)
+
+# 6. Commit and push
 git add .
 git commit -m "Your message"
 git push
@@ -250,6 +272,8 @@ docker-compose up -d
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
+
+# Install DBeaver (see Step 6 for your OS)
 ```
 
 ---
@@ -274,6 +298,11 @@ pip install -r requirements.txt
 - Check if container is running: `docker ps`
 - Check logs: `docker-compose logs postgres`
 
+### DBeaver can't connect
+- Make sure Docker container is running: `docker ps`
+- Verify port 5432 is correct
+- Check password matches your `.env` file
+
 ### Python can't find modules
 - Make sure venv is activated: `source venv/bin/activate`
 - Reinstall: `pip install -r requirements.txt`
@@ -292,7 +321,7 @@ docker-compose down
 # View database logs
 docker-compose logs -f
 
-# Connect to database directly
+# Connect to database via terminal
 docker exec -it cricket_postgres psql -U postgres -d cricket
 
 # Reset database (delete all data)
@@ -309,8 +338,8 @@ git config --list --local
 
 1. **core.sshCommand** tells this repo to use your personal SSH key
 2. **Local git config** keeps personal commits separate from company work
-3. **Docker** keeps PostgreSQL + pgAdmin portable across machines
-4. **pgModeler** for visual data modeling (saved to `models/` folder)
+3. **Docker** keeps PostgreSQL portable across machines
+4. **DBeaver** for database GUI + visual data modeling (free, cross-platform)
 5. **Virtual environment** keeps Python dependencies isolated
 6. **.env file** keeps secrets out of git
 
@@ -321,6 +350,5 @@ This approach is repo-specific and won't affect your other projects!
 ## Next Steps
 
 📖 **Read the WORKFLOW_GUIDE.md** for detailed instructions on:
-- How to save pgAdmin work to git
-- How to use pgModeler effectively
+- How to save DBeaver work to git
 - The complete database development workflow

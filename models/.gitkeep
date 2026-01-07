@@ -1,10 +1,12 @@
-# pgModeler Data Models
+# DBeaver ERD / Data Models
 # 
-# Save your .dbm files (pgModeler projects) in this folder.
-# These files are XML-based and track well in git.
+# Save your ERD exports in this folder:
+# - .png or .svg files (ERD images for documentation)
+# - .erd files (DBeaver ERD project files)
+# - SQL exports from ERD designs
 #
 # Workflow:
-# 1. Design your model in pgModeler
-# 2. Save as .dbm file in this folder
+# 1. Design your model in DBeaver ERD
+# 2. Export image here for documentation
 # 3. Export SQL to sql/migrations/ folder
-# 4. Commit both the .dbm and .sql files
+# 4. Commit both
