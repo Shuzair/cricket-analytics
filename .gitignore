@@ -28,9 +28,7 @@ build/
 .DS_Store
 
 # Data files (don't commit large data)
-data/*.csv
-data/*.json
-data/*.parquet
+data/*
 *.csv
 *.xlsx
 !data/.gitkeep
