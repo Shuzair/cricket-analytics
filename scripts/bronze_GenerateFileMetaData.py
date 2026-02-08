@@ -63,8 +63,9 @@ def extract_record(filepath: str) -> dict | None:
     # Store as a consistent string "Team1 vs Team2" for easy querying
     teams_str = " vs ".join(teams) if isinstance(teams, list) and teams else None
 
-    # 7. File path (absolute)
-    file_path = os.path.abspath(filepath)
+    # 7. File path (relative to project root)
+    project_root = Path(__file__).resolve().parent.parent
+    file_path = str(Path(filepath).resolve().relative_to(project_root))
 
     # 8. File hash (SHA-256)
     try:
