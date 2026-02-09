@@ -1,145 +1,204 @@
+"""
+Bronze Layer – Cricket Match File Metadata Pipeline
+====================================================
+Extract metadata from Cricsheet JSON files and upsert into
+bronze.cricket_match_file_metadata.
+
+Files that fail extraction are logged to
+bronze.cricket_match_file_processing_failures (truncate-insert per run).
+
+Usage:
+    python scripts/bronze_GenerateFileMetaData.py [data_directory]
+"""
+
 import hashlib
 import json
-import os
+import logging
 import sys
 from pathlib import Path
 from typing import Generator
 
-import pandas as pd
+# ── Project imports ─────────────────────────────────────────────────────────────
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+from db.connection import get_connection
+
+# ── Logging ─────────────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+log = logging.getLogger(__name__)
+
+# ── Constants ───────────────────────────────────────────────────────────────────
+BATCH_SIZE = 500  # rows per INSERT batch – balances memory vs round-trips
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+UPSERT_SQL = """
+    INSERT INTO bronze.cricket_match_file_metadata
+        (start_date, team_type, match_type, gender, match_id, teams, file_path, file_hash)
+    VALUES
+        (%s, %s, %s, %s, %s, %s, %s, %s)
+    ON CONFLICT (file_hash) DO UPDATE SET
+        last_modified_timestamp = CURRENT_TIMESTAMP
+"""
+
+TRUNCATE_FAILURES_SQL = "TRUNCATE TABLE bronze.cricket_match_file_processing_failures RESTART IDENTITY"
+
+INSERT_FAILURE_SQL = """
+    INSERT INTO bronze.cricket_match_file_processing_failures
+        (file_path, error_message, error_type)
+    VALUES
+        (%s, %s, %s)
+"""
 
 
-
-def load_json(path: str) -> dict:
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
+# ── Helpers ─────────────────────────────────────────────────────────────────────
 
 def file_sha256(filepath: str, buf_size: int = 65536) -> str:
-    """Compute SHA-256 hash of a file using buffered reads."""
+    """Compute SHA-256 hash using buffered reads (constant memory)."""
     h = hashlib.sha256()
     with open(filepath, "rb") as f:
-        while True:
-            chunk = f.read(buf_size)
-            if not chunk:
-                break
+        while chunk := f.read(buf_size):
             h.update(chunk)
     return h.hexdigest()
 
 
-def extract_record(filepath: str) -> dict | None:
+def extract_record(filepath: str) -> tuple:
     """
-    Extract a single record from a Cricsheet JSON file.
-    Returns None if the file is invalid or unreadable.
+    Parse a single Cricsheet JSON file and return a tuple ready for INSERT.
+    Raises ValueError for validation issues, lets OSError / JSONDecodeError propagate.
     """
-    try:
-        data = load_json(filepath)
-    except (json.JSONDecodeError, ValueError, OSError) as e:
-        print(f"[WARN] Skipping {filepath}: {e}", file=sys.stderr)
-        return None
+    with open(filepath, "r", encoding="utf-8") as f:
+        data = json.load(f)
 
     info = data.get("info")
     if info is None:
-        print(f"[WARN] Skipping {filepath}: missing 'info' section", file=sys.stderr)
-        return None
+        raise ValueError("missing 'info' key in JSON")
 
-    # 1. Start date – first element of the dates array
     dates = info.get("dates")
     start_date = dates[0] if dates and isinstance(dates, list) else None
 
-    # 2. Team type – 'club' or 'international'
     team_type = info.get("team_type")
-
-    # 3. Match type – Test, ODI, T20, IT20, ODM, MDM, or club competition code
     match_type = info.get("match_type")
-
-    # 4. Gender
     gender = info.get("gender")
 
-    # 5. Match ID – derived from the filename (Cricsheet convention: <id>.json)
+    missing = [k for k, v in {"start_date": start_date, "team_type": team_type,
+                               "match_type": match_type, "gender": gender}.items() if not v]
+    if missing:
+        raise ValueError(f"missing required field(s): {', '.join(missing)}")
+
     match_id = Path(filepath).stem
-
-    # 6. Teams
     teams = info.get("teams", [])
-    # Store as a consistent string "Team1 vs Team2" for easy querying
     teams_str = " vs ".join(teams) if isinstance(teams, list) and teams else None
+    if not teams_str:
+        raise ValueError("missing or empty 'teams' array")
 
-    # 7. File path (relative to project root)
-    project_root = Path(__file__).resolve().parent.parent
-    file_path = str(Path(filepath).resolve().relative_to(project_root))
+    rel_path = str(Path(filepath).resolve().relative_to(PROJECT_ROOT))
+    fhash = file_sha256(filepath)
 
-    # 8. File hash (SHA-256)
-    try:
-        file_hash = file_sha256(filepath)
-    except OSError as e:
-        print(f"[WARN] Could not hash {filepath}: {e}", file=sys.stderr)
-        file_hash = None
-
-    return {
-        "start_date": start_date,
-        "team_type": team_type,
-        "match_type": match_type,
-        "gender": gender,
-        "match_id": match_id,
-        "teams": teams_str,
-        "file_path": file_path,
-        "file_hash": file_hash,
-    }
+    return (start_date, team_type, match_type, gender, match_id, teams_str, rel_path, fhash)
 
 
-def iter_records(data_dir: str) -> Generator[dict, None, None]:
-    """Yield one record dict per valid JSON file in data_dir (non-recursive)."""
+def iter_files(data_dir: str) -> Generator[tuple | tuple, None, None]:
+    """
+    Yield (record_tuple, None) for successes or (None, failure_tuple) for failures
+    per valid JSON file (sorted, non-recursive).
+    """
     dir_path = Path(data_dir)
     if not dir_path.is_dir():
         raise FileNotFoundError(f"Data directory not found: {data_dir}")
 
     for entry in sorted(dir_path.iterdir()):
-        if entry.suffix.lower() == ".json" and entry.is_file():
-            record = extract_record(str(entry))
-            if record is not None:
-                yield record
+        if entry.suffix.lower() != ".json" or not entry.is_file():
+            continue
+
+        filepath = str(entry)
+        rel_path = str(entry.resolve().relative_to(PROJECT_ROOT))
+
+        try:
+            record = extract_record(filepath)
+            yield (record, None)
+        except Exception as exc:
+            error_type = type(exc).__name__
+            error_msg = str(exc)[:500]  # cap length for DB column
+            log.warning("FAILED %s [%s]: %s", rel_path, error_type, error_msg)
+            yield (None, (rel_path, error_msg, error_type))
 
 
-def build_dataframe(data_dir: str = "data") -> pd.DataFrame:
+# ── Database loader ─────────────────────────────────────────────────────────────
+
+def load_to_db(data_dir: str) -> tuple[int, int]:
     """
-    Build a DataFrame from all Cricsheet JSON files in `data_dir`.
-
-    Columns:
-        start_date  : str   (YYYY-MM-DD)
-        team_type   : str   ('club' | 'international')
-        match_type  : str   (Test, ODI, T20, IT20, ODM, MDM, or competition code)
-        gender      : str   ('male' | 'female')
-        match_id    : str   (filename stem, e.g. '1234567')
-        teams       : str   ('Team A vs Team B')
-        file_path   : str   (absolute path)
-        file_hash   : str   (SHA-256 hex digest)
+    Stream records from JSON files into PostgreSQL in batches.
+    - Upserts successful records into bronze.cricket_match_file_metadata
+    - Truncates then inserts failures into bronze.cricket_match_file_processing_failures
+    Returns (rows_upserted, rows_failed).
     """
-    records = list(iter_records(data_dir))
+    conn = get_connection()
+    total = 0
+    batch: list[tuple] = []
+    failures: list[tuple] = []
 
-    if not records:
-        print("[INFO] No valid JSON files found.", file=sys.stderr)
-        return pd.DataFrame(
-            columns=[
-                "start_date", "team_type", "match_type", "gender",
-                "match_id", "teams", "file_path", "file_hash",
-            ]
-        )
+    try:
+        with conn.cursor() as cur:
+            # Truncate failures table at the start of every run
+            cur.execute(TRUNCATE_FAILURES_SQL)
+            conn.commit()
+            log.info("Truncated bronze.cricket_match_file_processing_failures")
 
-    df = pd.DataFrame(records)
+            # ── Stream files ────────────────────────────────────────────────
+            for record, failure in iter_files(data_dir):
+                if failure is not None:
+                    failures.append(failure)
+                    continue
 
-    # Convert start_date to datetime for efficient querying; invalid dates become NaT
-    df["start_date"] = pd.to_datetime(df["start_date"], errors="coerce")
+                batch.append(record)
+                if len(batch) >= BATCH_SIZE:
+                    cur.executemany(UPSERT_SQL, batch)
+                    conn.commit()
+                    total += len(batch)
+                    log.info("Committed batch – %d rows so far", total)
+                    batch.clear()
 
-    # Use categoricals for low-cardinality columns to save memory
-    for col in ("team_type", "match_type", "gender"):
-        df[col] = df[col].astype("category")
+            # flush remaining successes
+            if batch:
+                cur.executemany(UPSERT_SQL, batch)
+                conn.commit()
+                total += len(batch)
 
-    return df
+            # ── Flush failures in one batch ─────────────────────────────────
+            if failures:
+                cur.executemany(INSERT_FAILURE_SQL, failures)
+                conn.commit()
+                log.warning("Logged %d failure(s) to processing_failures table", len(failures))
+
+    except Exception:
+        conn.rollback()
+        log.exception("Pipeline failed – transaction rolled back")
+        raise
+    finally:
+        conn.close()
+
+    return total, len(failures)
 
 
-# ── Main ────────────────────────────────────────────────────────────────────────
+# ── Entry point ─────────────────────────────────────────────────────────────────
+
 if __name__ == "__main__":
     data_directory = sys.argv[1] if len(sys.argv) > 1 else "data"
-    df = build_dataframe(data_directory)
-    print(f"Loaded {len(df)} matches from '{data_directory}'")
-    print(df.head(10).to_string(index=False))
-    print(f"\nDtypes:\n{df.dtypes}")
+    log.info("Starting metadata ingestion from '%s'", data_directory)
+
+    try:
+        rows, failed = load_to_db(data_directory)
+        log.info(
+            "Done – %d rows upserted, %d failures logged", rows, failed
+        )
+        if failed:
+            log.warning("Check bronze.cricket_match_file_processing_failures for details")
+    except FileNotFoundError as exc:
+        log.error(exc)
+        sys.exit(1)
+    except Exception:
+        log.error("Pipeline failed")
+        sys.exit(1)
