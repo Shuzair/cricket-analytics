@@ -1,5 +1,9 @@
 version: '3.8'
 
+networks:
+  cricket_net:
+    name: cricket_net
+
 services:
   postgres:
     image: postgres:16
@@ -13,14 +17,59 @@ services:
       - "${DB_PORT:-5432}:5432"
     volumes:
       - cricket_data:/var/lib/postgresql/data
-      - ./sql/init:/docker-entrypoint-initdb.d  # Auto-run SQL files on first start
-      - ./postgresql.conf:/etc/postgresql/postgresql.conf:ro  # Custom config for monitoring
+      - ./sql/init:/docker-entrypoint-initdb.d
+      - ./postgresql.conf:/etc/postgresql/postgresql.conf:ro
     command: postgres -c config_file=/etc/postgresql/postgresql.conf
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - cricket_net
+
+  spark:
+    image: bitnami/spark:3.5
+    container_name: cricket_spark
+    restart: unless-stopped
+    environment:
+      SPARK_MODE: master
+      DB_HOST: postgres
+      DB_PORT: ${DB_PORT:-5432}
+      DB_NAME: ${DB_NAME:-cricket}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-cricket123}
+      JDBC_JAR_PATH: /opt/bitnami/spark/jars/postgresql.jar
+    volumes:
+      - ./data:/opt/spark/data
+      - ./scripts:/opt/spark/scripts
+      - ./jars/postgresql-42.7.4.jar:/opt/bitnami/spark/jars/postgresql.jar:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - cricket_net
+
+  dbt:
+    image: ghcr.io/dbt-labs/dbt-postgres:1.9.latest
+    container_name: cricket_dbt
+    restart: "no"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: ${DB_PORT:-5432}
+      DB_NAME: ${DB_NAME:-cricket}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-cricket123}
+    volumes:
+      - ./dbt:/usr/app/dbt
+    working_dir: /usr/app/dbt
+    entrypoint: ["dbt"]
+    command: ["--help"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - cricket_net
 
 volumes:
   cricket_data:
