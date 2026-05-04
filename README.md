@@ -16,18 +16,15 @@ Install these before starting:
 | **Docker Desktop** | https://docker.com/products/docker-desktop | https://docker.com/products/docker-desktop | https://docker.com/products/docker-desktop |
 | **Python 3.10+** | `brew install python` | https://python.org/downloads (✅ Check "Add to PATH") | `sudo apt install python3 python3-venv python3-pip` |
 
+> **PySpark and dbt run inside Docker** — you do not need to install them locally.
+
 ---
 
 ## Step 1: Clone the Repository
 
 ```bash
-# Go to where you want the project
 cd ~
-
-# Clone the repo (replace YOUR_USERNAME)
 git clone git@github.com:YOUR_USERNAME/cricket-analytics.git
-
-# Enter the folder
 cd cricket-analytics
 ```
 
@@ -38,12 +35,9 @@ cd cricket-analytics
 If this is a personal project on a work machine:
 
 ```bash
-cd cricket-analytics
 git config user.name "Your Name"
 git config user.email "your.personal.email@gmail.com"
 ```
-
-This sets your identity for this repo only.
 
 ---
 
@@ -57,19 +51,27 @@ Edit `.env` if you want to change the default database password.
 
 ---
 
-## Step 4: Start PostgreSQL (Docker)
+## Step 4: Download the PostgreSQL JDBC Driver
 
-### 4.1 Start Docker Desktop
-
-Make sure Docker Desktop is running (open the app).
-
-### 4.2 Start the Database
+PySpark uses JDBC to write to PostgreSQL. Download the driver into the `jars/` folder:
 
 ```bash
-docker-compose up -d
+curl -L https://jdbc.postgresql.org/download/postgresql-42.7.4.jar -o jars/postgresql-42.7.4.jar
 ```
 
-### 4.3 Verify It's Running
+This file is git-ignored (binary). You need to re-download it on each new machine.
+
+---
+
+## Step 5: Start PostgreSQL
+
+Make sure Docker Desktop is running, then start only the database:
+
+```bash
+docker compose up postgres -d
+```
+
+Verify it's running:
 
 ```bash
 docker ps
@@ -77,37 +79,25 @@ docker ps
 
 You should see `cricket_postgres` in the list.
 
+> **Why only postgres?** Spark and dbt are run on-demand for specific tasks — they don't need to stay running. See the [Daily Workflow](#daily-workflow) section.
+
 ---
 
-## Step 5: Set Up Python Environment
+## Step 6: Set Up Python Environment (for local scripts)
 
 ### Mac/Linux:
 
 ```bash
-# Create virtual environment
 python3 -m venv venv
-
-# Activate it
 source venv/bin/activate
-
-# Install dependencies
 pip install -r requirements.txt
 ```
 
 ### Windows (PowerShell):
 
 ```powershell
-# Create virtual environment
 python -m venv venv
-
-# Activate it (Option A - recommended)
 .\venv\Scripts\Activate.bat
-
-# OR if that doesn't work, enable scripts first:
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-.\venv\Scripts\Activate.ps1
-
-# Install dependencies
 pip install -r requirements.txt
 ```
 
@@ -121,19 +111,7 @@ pip install -r requirements.txt
 
 ---
 
-## Step 6: Test the Connection
-
-```bash
-python src/db/connection.py
-```
-
-✅ Success: `Successfully connected to PostgreSQL!`
-
----
-
-## Step 7: Set Up Your SQL IDE
-
-Connect your preferred SQL IDE (DBeaver, pgAdmin, DataGrip, etc.) with these settings:
+## Step 7: Connect Your SQL IDE (DBeaver / pgAdmin / DataGrip)
 
 | Setting | Value |
 |---------|-------|
@@ -141,43 +119,147 @@ Connect your preferred SQL IDE (DBeaver, pgAdmin, DataGrip, etc.) with these set
 | Port | `5432` |
 | Database | `cricket` |
 | User | `postgres` |
-| Password | `cricket123` (or your .env value) |
+| Password | `cricket123` (or your `.env` value) |
 
 ---
 
-## Setup Complete! 🎉
+## Setup Complete!
 
 Your environment is ready:
 - ✅ PostgreSQL running in Docker
+- ✅ JDBC driver in `jars/`
 - ✅ Python environment configured
-- ✅ Connected to GitHub
+- ✅ SQL IDE connected
 
 ---
 
-# PART 2: WORKFLOW
+# PART 2: ARCHITECTURE
 
-## Project Structure Overview
+## Data Stack
+
+| Tool | Version | Role |
+|------|---------|------|
+| **PostgreSQL** | 16 | Storage — runs always |
+| **PySpark** | 3.5 | Bronze layer ETL — reads Cricsheet JSON, writes via JDBC |
+| **dbt** | 1.9 | Transformations — bronze → silver → gold |
+
+All three services share a Docker network (`cricket_net`). Spark and dbt reach the database using the hostname `postgres` (the Docker service name), not `localhost`.
+
+## Medallion Architecture
+
+```
+Cricsheet JSON files  (data/)
+        │
+        ▼
+   PySpark ETL  (scripts/bronze_GenerateFileMetaData.py)
+        │
+        ├──▶  bronze.cricket_match_file_metadata
+        └──▶  bronze.cricket_match_file_processing_failures
+                        │
+                        ▼
+                 dbt silver models  (dbt/models/silver/)
+                        │
+                        ├──▶  silver schema
+                        │
+                        ▼
+              dbt gold models
+                        ├──▶  gold_ba schema  (business analytics)
+                        └──▶  gold_ml schema  (ML features)
+```
+
+## PostgreSQL Schemas
+
+| Schema | Populated by | Purpose |
+|--------|-------------|---------|
+| `bronze` | PySpark | Raw file metadata from Cricsheet JSON |
+| `silver` | dbt | Cleaned and typed data |
+| `gold_ba` | dbt | Business analytics aggregations |
+| `gold_ml` | dbt | Feature tables for ML models |
+| `ref` | manual SQL | Reference / dimension tables |
+| `public` | init SQL | Seed example tables (matches, players, stats) |
+
+## Project Structure
 
 ```
 cricket-analytics/
+├── docker-compose.yml      # All three services + shared network
+├── dbt/                    # dbt project
+│   ├── dbt_project.yml
+│   ├── profiles.yml        # DB connection (reads from env vars)
+│   └── models/
+│       ├── silver/
+│       ├── gold_ba/
+│       └── gold_ml/
+├── scripts/
+│   ├── bronze_GenerateFileMetaData.py  # PySpark bronze ETL
+│   └── export_db_objects.py            # Export live DB objects to SQL files
 ├── sql/
-│   ├── init/           # Auto-runs on first DB start
-│   ├── migrations/     # Schema changes
-│   ├── tables/         # Table definitions
-│   ├── functions/      # Stored functions
-│   ├── views/          # SQL views
-│   ├── procedures/     # Stored procedures
-│   └── triggers/       # Database triggers
-├── models/             # ERD diagrams and exports
-├── src/                # Python code
-├── scripts/            # Utility scripts
-├── data/               # Data files (git ignored)
-└── notebooks/          # Jupyter notebooks
+│   ├── init/               # Auto-runs once on first DB start
+│   ├── migrations/         # Numbered schema changes (run manually)
+│   ├── schemas/            # Schema creation scripts
+│   ├── tables/             # Table DDL
+│   ├── functions/          # Stored functions
+│   └── views/              # SQL views
+├── jars/                   # JDBC driver (git-ignored)
+├── data/                   # Cricsheet JSON files (git-ignored)
+├── src/                    # Python utilities
+└── notebooks/              # Jupyter notebooks
 ```
 
 ---
 
-## The Golden Rule
+# PART 3: WORKFLOW
+
+## Daily Workflow
+
+### Starting Your Day
+
+```bash
+# 1. Start PostgreSQL (always-on)
+docker compose up postgres -d
+
+# 2. Activate Python environment (for local scripts)
+source venv/bin/activate        # Mac/Linux
+.\venv\Scripts\Activate.bat     # Windows
+
+# 3. Open your SQL IDE and connect
+# 4. Pull latest changes
+git pull
+```
+
+### Running the Bronze Pipeline (PySpark)
+
+PySpark starts on demand, runs the job, then stops:
+
+```bash
+docker compose run --rm spark spark-submit \
+  /opt/spark/scripts/bronze_GenerateFileMetaData.py \
+  /opt/spark/data
+```
+
+### Running dbt Transformations
+
+```bash
+# Test connection
+docker compose run --rm dbt dbt debug
+
+# Run all models (bronze → silver → gold)
+docker compose run --rm dbt dbt run
+
+# Run a single layer only
+docker compose run --rm dbt dbt run --select silver
+docker compose run --rm dbt dbt run --select gold_ba
+docker compose run --rm dbt dbt run --select gold_ml
+
+# Run dbt tests
+docker compose run --rm dbt dbt test
+```
+
+---
+
+## How to Save SQL Work to Git
+
+### The Golden Rule
 
 > **If it's not in a file in your project folder, it won't go to GitHub.**
 
@@ -185,85 +267,17 @@ When you create something in your SQL IDE (function, view, table), it lives in t
 
 ---
 
-## Daily Workflow
-
-### Starting Your Day
-
-**Mac/Linux:**
-```bash
-# 1. Start Docker (if not running)
-docker-compose up -d
-
-# 2. Activate Python environment
-source venv/bin/activate
-
-# 3. Open your SQL IDE and connect
-```
-
-**Windows:**
-```powershell
-# 1. Start Docker (if not running)
-docker-compose up -d
-
-# 2. Activate Python environment
-.\venv\Scripts\Activate.bat
-
-# 3. Open your SQL IDE and connect
-```
-
----
-
-## How to Save SQL Work to Git
-
-### Understanding the Database Structure
-
-By default, PostgreSQL uses a schema called `public`. Think of schemas as folders inside your database that organize tables, functions, and views.
-
-```
-Database: cricket
-└── Schema: public (default)
-    ├── Tables
-    ├── Functions
-    └── Views
-```
-
-If you create custom schemas (e.g., `analytics`, `staging`, `raw_data`), your structure becomes:
-
-```
-Database: cricket
-├── Schema: public
-│   └── (default tables)
-├── Schema: analytics
-│   ├── Tables
-│   └── Views
-├── Schema: staging
-│   └── Tables
-└── Schema: raw_data
-    └── Tables
-```
-
----
-
 ### Method A: Write SQL Files First (Recommended)
-
-This is the safest approach — your work is always in Git from the start.
 
 **1. Create a SQL file:**
 
 ```bash
-# Create a new file for your function
 touch sql/functions/calculate_average.sql
 ```
-
-**What this does:** Creates an empty file named `calculate_average.sql` in the `sql/functions/` folder. This file will be tracked by Git.
 
 **2. Write your SQL in the file:**
 
 ```sql
--- sql/functions/calculate_average.sql
--- This function calculates batting average
--- Formula: runs / (innings - not_outs)
-
 CREATE OR REPLACE FUNCTION calculate_batting_average(
     p_runs INTEGER,
     p_innings INTEGER,
@@ -279,458 +293,110 @@ END;
 $$ LANGUAGE plpgsql;
 ```
 
-**3. Run the file to load into database:**
+**3. Run the file against the database:**
 
-**Option A — From terminal:**
-
+**Mac/Linux:**
 ```bash
 docker exec -i cricket_postgres psql -U postgres -d cricket < sql/functions/calculate_average.sql
 ```
 
-**Breaking down this command:**
-| Part | What it does |
-|------|--------------|
-| `docker exec` | Run a command inside a Docker container |
-| `-i` | Interactive mode (allows input from file) |
-| `cricket_postgres` | Name of your PostgreSQL container |
-| `psql` | PostgreSQL command-line tool |
-| `-U postgres` | Connect as user "postgres" |
-| `-d cricket` | Connect to database "cricket" |
-| `< sql/functions/calculate_average.sql` | Feed this SQL file as input |
-
-**Option B — From your SQL IDE:**
-- Open the `.sql` file in your IDE
-- Connect to the database
-- Execute it (usually `Ctrl+Enter` or `Cmd+Enter`)
-
-**4. Test it in your SQL IDE:**
-
-```sql
-SELECT calculate_batting_average(500, 10, 2);
--- Should return: 62.50
-```
-
-**5. Commit to Git:**
-
-```bash
-git add sql/functions/calculate_average.sql
-git commit -m "Add batting average function"
-git push
-```
-
-**Breaking down these commands:**
-| Command | What it does |
-|---------|--------------|
-| `git add sql/functions/calculate_average.sql` | Stage this specific file for commit |
-| `git commit -m "Add batting average function"` | Save the staged changes with a message |
-| `git push` | Upload your commits to GitHub |
-
----
-
-### Method B: Create in SQL IDE, Then Export
-
-If you prefer designing in your IDE first, you'll need to export your work to files.
-
-**1. Create your function/view/table in the SQL IDE**
-
-Write and execute your SQL directly in the IDE.
-
-**2. Export to a file using the script:**
-
-```bash
-# Make sure venv is activated first
-source venv/bin/activate  # Mac/Linux
-.\venv\Scripts\Activate.bat  # Windows
-
-# Export all database objects to SQL files
-python scripts/export_db_objects.py --all
-```
-
-**What this does:** The script connects to your database, reads all functions/views/tables, and writes them to `.sql` files in the appropriate folders.
-
-**Export specific types only:**
-
-```bash
-# Export only functions
-python scripts/export_db_objects.py --functions
-
-# Export only views
-python scripts/export_db_objects.py --views
-
-# Export only table schemas (structure, not data)
-python scripts/export_db_objects.py --tables
-
-# Export a specific function by name
-python scripts/export_db_objects.py --function calculate_batting_average
-
-# Export a specific view by name
-python scripts/export_db_objects.py --view player_summary
-```
-
-**3. Check the exported files:**
-
-```bash
-ls sql/functions/   # List all exported functions
-ls sql/views/       # List all exported views
-ls sql/tables/      # List all exported table schemas
+**Windows (PowerShell):**
+```powershell
+Get-Content sql/functions/calculate_average.sql | docker exec -i cricket_postgres psql -U postgres -d cricket
 ```
 
 **4. Commit to Git:**
 
 ```bash
-git add .                              # Stage all changes
-git commit -m "Export database objects" # Commit with message
-git push                               # Push to GitHub
+git add sql/functions/calculate_average.sql
+git commit -m "feat: add batting average function"
+git push
 ```
 
 ---
 
-### Working with Custom Schemas
+### Method B: Create in SQL IDE, Then Export
 
-If you create your own schemas instead of using the default `public` schema, you need to organize your files and commands accordingly.
+**1. Create your function/view/table in the SQL IDE and execute it.**
 
-#### Directory Structure for Custom Schemas
-
-```
-sql/
-├── schemas/                    # Schema creation scripts
-│   ├── create_analytics.sql
-│   ├── create_staging.sql
-│   └── create_raw_data.sql
-├── analytics/                  # Objects in 'analytics' schema
-│   ├── tables/
-│   ├── functions/
-│   └── views/
-├── staging/                    # Objects in 'staging' schema
-│   ├── tables/
-│   └── functions/
-├── raw_data/                   # Objects in 'raw_data' schema
-│   └── tables/
-└── public/                     # Objects in default 'public' schema
-    ├── tables/
-    ├── functions/
-    └── views/
-```
-
-#### Creating a Schema
-
-**sql/schemas/create_analytics.sql:**
-```sql
--- Create the analytics schema
--- This schema holds all analytical views and functions
-
-CREATE SCHEMA IF NOT EXISTS analytics;
-
--- Grant usage to postgres user
-GRANT ALL ON SCHEMA analytics TO postgres;
-
--- Set comment for documentation
-COMMENT ON SCHEMA analytics IS 'Schema for analytical views and reporting functions';
-```
-
-**Run it:**
-```bash
-docker exec -i cricket_postgres psql -U postgres -d cricket < sql/schemas/create_analytics.sql
-```
-
-#### Creating Objects in Custom Schemas
-
-When creating objects in a custom schema, you must specify the schema name:
-
-**sql/analytics/functions/calculate_team_stats.sql:**
-```sql
--- Function in the 'analytics' schema
--- Note: schema_name.function_name
-
-CREATE OR REPLACE FUNCTION analytics.calculate_team_stats(
-    p_team_name VARCHAR
-)
-RETURNS TABLE (
-    total_matches INTEGER,
-    wins INTEGER,
-    losses INTEGER
-) AS $$
-BEGIN
-    RETURN QUERY
-    SELECT 
-        COUNT(*)::INTEGER as total_matches,
-        COUNT(*) FILTER (WHERE winner = p_team_name)::INTEGER as wins,
-        COUNT(*) FILTER (WHERE winner != p_team_name)::INTEGER as losses
-    FROM public.matches
-    WHERE team_1 = p_team_name OR team_2 = p_team_name;
-END;
-$$ LANGUAGE plpgsql;
-```
-
-**sql/analytics/views/team_summary.sql:**
-```sql
--- View in the 'analytics' schema
-
-CREATE OR REPLACE VIEW analytics.team_summary AS
-SELECT 
-    team_name,
-    COUNT(*) as matches_played,
-    SUM(wins) as total_wins
-FROM public.matches
-GROUP BY team_name;
-```
-
-#### Running Custom Schema Files
-
-The command structure stays the same, just use the correct file path:
+**2. Export to files:**
 
 ```bash
-# Run a function in analytics schema
-docker exec -i cricket_postgres psql -U postgres -d cricket < sql/analytics/functions/calculate_team_stats.sql
+source venv/bin/activate   # ensure venv is active
 
-# Run a view in analytics schema
-docker exec -i cricket_postgres psql -U postgres -d cricket < sql/analytics/views/team_summary.sql
-
-# Run all files in analytics/functions folder (Mac/Linux)
-for f in sql/analytics/functions/*.sql; do
-  echo "Running $f..."
-  docker exec -i cricket_postgres psql -U postgres -d cricket < "$f"
-done
+python scripts/export_db_objects.py --all        # export everything
+python scripts/export_db_objects.py --functions  # functions only
+python scripts/export_db_objects.py --views      # views only
+python scripts/export_db_objects.py --tables     # table schemas only
 ```
 
-#### Querying Objects in Custom Schemas
-
-```sql
--- Must include schema name when querying
-SELECT * FROM analytics.team_summary;
-SELECT analytics.calculate_team_stats('India');
-
--- Or set search path to include your schema
-SET search_path TO analytics, public;
-SELECT * FROM team_summary;  -- Now works without schema prefix
-```
-
-#### Setting Default Search Path
-
-If you want to avoid typing schema names every time, set the search path in your session or permanently:
-
-**Per session (in SQL IDE):**
-```sql
-SET search_path TO analytics, staging, public;
-```
-
-**Permanently for the database:**
-```sql
-ALTER DATABASE cricket SET search_path TO analytics, staging, public;
-```
-
----
-
-### Summary: Where to Save What
-
-| What you create | Where to save | Example path |
-|-----------------|---------------|--------------|
-| Schema creation | `sql/schemas/` | `sql/schemas/create_analytics.sql` |
-| Table (public) | `sql/tables/` | `sql/tables/matches.sql` |
-| Table (custom schema) | `sql/{schema}/tables/` | `sql/analytics/tables/stats.sql` |
-| Function (public) | `sql/functions/` | `sql/functions/calc_average.sql` |
-| Function (custom schema) | `sql/{schema}/functions/` | `sql/analytics/functions/calc_stats.sql` |
-| View (public) | `sql/views/` | `sql/views/player_summary.sql` |
-| View (custom schema) | `sql/{schema}/views/` | `sql/analytics/views/team_summary.sql` |
-| Schema changes | `sql/migrations/` | `sql/migrations/004_add_index.sql` |
+**3. Commit the exported files.**
 
 ---
 
 ## SQL File Organization
 
-### Default Structure (Using Public Schema)
-
-| Type | Location | When to Use |
-|------|----------|-------------|
-| Initial schema | `sql/init/` | Tables/setup that run on first DB start |
-| Schema changes | `sql/migrations/` | Adding/altering tables after initial setup |
-| Table definitions | `sql/tables/` | Exported table schemas |
+| Type | Location | Notes |
+|------|----------|-------|
+| Init scripts | `sql/init/` | Auto-run once on first container start |
+| Schema changes | `sql/migrations/` | Numbered (`004_`, `005_`, …), run manually |
+| Table definitions | `sql/tables/` | DDL for bronze tables and public seed tables |
+| Schemas | `sql/schemas/` | One file per schema (`bronze.sql`, `silver.sql`, etc.) |
 | Functions | `sql/functions/` | Stored functions |
 | Views | `sql/views/` | SQL views |
-| Procedures | `sql/procedures/` | Stored procedures |
-| Triggers | `sql/triggers/` | Database triggers |
 
-### With Custom Schemas
-
-| Type | Location | Example |
-|------|----------|---------|
-| Schema creation | `sql/schemas/` | `sql/schemas/create_analytics.sql` |
-| Tables in custom schema | `sql/{schema_name}/tables/` | `sql/analytics/tables/` |
-| Functions in custom schema | `sql/{schema_name}/functions/` | `sql/analytics/functions/` |
-| Views in custom schema | `sql/{schema_name}/views/` | `sql/analytics/views/` |
-
----
-
-## Naming Conventions
-
-### Migrations (run in order)
-```
-sql/migrations/
-├── 001_initial_schema.sql
-├── 002_add_player_stats.sql
-├── 003_add_indexes.sql
-└── 004_add_bowling_tables.sql
-```
-
-### Functions/Views (by name)
-```
-sql/functions/
-├── calculate_strike_rate.sql
-├── calculate_batting_average.sql
-└── get_player_stats.sql
-
-sql/views/
-├── player_summary.sql
-├── match_summary.sql
-└── team_standings.sql
-```
+> **dbt models are not stored in `sql/`** — they live in `dbt/models/` and are managed by dbt.
 
 ---
 
 ## Running SQL Files
 
-### Understanding the Command
-
-The basic command to run a SQL file:
+**Single file:**
 
 ```bash
-docker exec -i cricket_postgres psql -U postgres -d cricket < path/to/file.sql
-```
-
-| Part | Meaning |
-|------|---------|
-| `docker exec` | Execute a command inside a running container |
-| `-i` | Interactive mode — allows piping input from a file |
-| `cricket_postgres` | The name of your PostgreSQL container (from docker-compose.yml) |
-| `psql` | PostgreSQL's command-line interface |
-| `-U postgres` | Username to connect as |
-| `-d cricket` | Database name to connect to |
-| `< path/to/file.sql` | Redirect the file contents as input |
-
-### Single File
-
-**Mac/Linux:**
-```bash
+# Mac/Linux
 docker exec -i cricket_postgres psql -U postgres -d cricket < sql/functions/my_function.sql
-```
 
-**Windows (PowerShell):**
-```powershell
+# Windows (PowerShell)
 Get-Content sql/functions/my_function.sql | docker exec -i cricket_postgres psql -U postgres -d cricket
 ```
 
-**Why different?** PowerShell doesn't support `<` for input redirection the same way. `Get-Content` reads the file and `|` pipes it to the command.
+**All files in a folder:**
 
-**Windows (Command Prompt):**
-```cmd
-docker exec -i cricket_postgres psql -U postgres -d cricket < sql/functions/my_function.sql
-```
-
-### All Files in a Folder
-
-**Mac/Linux:**
 ```bash
+# Mac/Linux
 for f in sql/functions/*.sql; do
   echo "Running $f..."
   docker exec -i cricket_postgres psql -U postgres -d cricket < "$f"
 done
 ```
 
-**What this does:**
-1. `for f in sql/functions/*.sql` — Loop through all `.sql` files in the folder
-2. `echo "Running $f..."` — Print which file is being executed
-3. `docker exec ... < "$f"` — Run each file against the database
-4. `done` — End the loop
-
-**Windows (PowerShell):**
 ```powershell
+# Windows (PowerShell)
 Get-ChildItem sql/functions/*.sql | ForEach-Object {
     Write-Host "Running $_..."
     Get-Content $_.FullName | docker exec -i cricket_postgres psql -U postgres -d cricket
 }
 ```
 
-### Running Files for Custom Schemas
-
-If you have custom schemas, use the same commands with the appropriate path:
-
-```bash
-# Run all files in analytics schema's functions folder
-for f in sql/analytics/functions/*.sql; do
-  echo "Running $f..."
-  docker exec -i cricket_postgres psql -U postgres -d cricket < "$f"
-done
-
-# Run all files in staging schema's tables folder
-for f in sql/staging/tables/*.sql; do
-  echo "Running $f..."
-  docker exec -i cricket_postgres psql -U postgres -d cricket < "$f"
-done
-```
-
 ---
 
 ## Git Workflow
 
-### Understanding Git Commands
-
-| Command | What it does |
-|---------|--------------|
-| `git status` | Shows which files have been changed/added/deleted |
-| `git diff` | Shows the actual changes in files (line by line) |
-| `git add .` | Stages ALL changed files for commit |
-| `git add <file>` | Stages a specific file for commit |
-| `git commit -m "message"` | Saves staged changes with a description |
-| `git push` | Uploads your commits to GitHub |
-| `git pull` | Downloads latest changes from GitHub |
-
 ### Before You Start Working
 
-Always pull latest changes to avoid conflicts:
 ```bash
 git pull
 ```
 
-**What this does:** Downloads any changes made by you (on another machine) or collaborators since your last pull.
-
 ### After Making Changes
 
 ```bash
-# 1. See what changed
-git status
-```
-This shows:
-- Red files = changed but not staged
-- Green files = staged and ready to commit
-- Untracked files = new files not yet added to Git
-
-```bash
-# 2. Review actual changes (optional but recommended)
-git diff
-```
-Shows line-by-line what was added (+) and removed (-).
-
-```bash
-# 3. Export any IDE work (if you used Method B)
-python scripts/export_db_objects.py --all
-```
-
-```bash
-# 4. Stage changes
-git add .                    # Stage everything
-# OR
-git add sql/functions/       # Stage only the functions folder
-# OR
-git add sql/functions/my_function.sql  # Stage one specific file
-```
-
-```bash
-# 5. Commit with a clear message
-git commit -m "Add player statistics functions"
-```
-
-```bash
-# 6. Push to GitHub
+git status                               # see what changed
+git diff                                 # review line-by-line changes
+python scripts/export_db_objects.py --all  # export any IDE work
+git add .
+git commit -m "feat: add player statistics view"
 git push
 ```
 
@@ -738,41 +404,39 @@ git push
 
 ```bash
 # ✅ Good
-git commit -m "Add calculate_strike_rate function"
-git commit -m "Create player_summary view"
-git commit -m "Add indexes to matches table"
-git commit -m "Fix batting average calculation for not-outs"
+git commit -m "feat: add calculate_strike_rate function"
+git commit -m "fix: correct batting average for not-outs"
+git commit -m "chore: export updated player_summary view"
 
 # ❌ Bad
 git commit -m "update"
 git commit -m "changes"
-git commit -m "fix"
 ```
 
 ---
 
 ## Setting Up on a New Machine
 
-When you clone the repo on a different computer:
-
 ```bash
 # 1. Clone
 git clone git@github.com:YOUR_USERNAME/cricket-analytics.git
 cd cricket-analytics
 
-# 2. Set up environment
+# 2. Environment
 cp .env.example .env
-docker-compose up -d
 
-# 3. Set up Python
+# 3. Download JDBC driver
+curl -L https://jdbc.postgresql.org/download/postgresql-42.7.4.jar -o jars/postgresql-42.7.4.jar
+
+# 4. Start PostgreSQL (DB auto-creates from sql/init/ files)
+docker compose up postgres -d
+
+# 5. Python environment
 python3 -m venv venv
-source venv/bin/activate  # Mac/Linux
+source venv/bin/activate   # Mac/Linux
 pip install -r requirements.txt
 
-# 4. Database auto-creates with sql/init/ files
-
-# 5. Apply additional SQL files (migrations, functions, etc.)
-# Mac/Linux:
+# 6. Apply migrations and functions
 for f in sql/migrations/*.sql; do docker exec -i cricket_postgres psql -U postgres -d cricket < "$f"; done
 for f in sql/functions/*.sql; do docker exec -i cricket_postgres psql -U postgres -d cricket < "$f"; done
 for f in sql/views/*.sql; do docker exec -i cricket_postgres psql -U postgres -d cricket < "$f"; done
@@ -780,98 +444,84 @@ for f in sql/views/*.sql; do docker exec -i cricket_postgres psql -U postgres -d
 
 ---
 
-## Useful Commands Reference
+# PART 4: REFERENCE
 
-### Docker
+## Docker Commands
 
 | Task | Command |
 |------|---------|
-| Start database | `docker-compose up -d` |
-| Stop database | `docker-compose down` |
-| View logs | `docker-compose logs -f` |
-| Restart database | `docker-compose restart` |
-| Reset database (delete all data) | `docker-compose down -v && docker-compose up -d` |
+| Start PostgreSQL (always-on) | `docker compose up postgres -d` |
+| Run bronze ETL (on demand) | `docker compose run --rm spark spark-submit /opt/spark/scripts/bronze_GenerateFileMetaData.py /opt/spark/data` |
+| Run dbt models | `docker compose run --rm dbt dbt run` |
+| Stop all services | `docker compose down` |
+| View logs | `docker compose logs -f postgres` |
+| Reset database (delete all data) | `docker compose down -v && docker compose up postgres -d` |
 
-### Database CLI
+## dbt Commands
+
+| Task | Command |
+|------|---------|
+| Test DB connection | `docker compose run --rm dbt dbt debug` |
+| Run all models | `docker compose run --rm dbt dbt run` |
+| Run one layer | `docker compose run --rm dbt dbt run --select silver` |
+| Run tests | `docker compose run --rm dbt dbt test` |
+
+## Database CLI
 
 ```bash
 # Connect to PostgreSQL CLI
 docker exec -it cricket_postgres psql -U postgres -d cricket
 
 # Inside psql:
-\dt          # List tables
-\df          # List functions
-\dv          # List views
-\d tablename # Describe table
-\q           # Quit
+\dt              # list tables in current schema
+\dt bronze.*     # list tables in bronze schema
+\df              # list functions
+\dv              # list views
+\dn              # list schemas
+\d tablename     # describe a table
+\q               # quit
 ```
 
-### Python
-
-| Task | Mac/Linux | Windows |
-|------|-----------|---------|
-| Activate venv | `source venv/bin/activate` | `.\venv\Scripts\Activate.bat` |
-| Deactivate venv | `deactivate` | `deactivate` |
-| Test DB connection | `python src/db/connection.py` | `python src/db/connection.py` |
-| Export DB objects | `python scripts/export_db_objects.py --all` | `python scripts/export_db_objects.py --all` |
-
-### Git
+## Python / Local Scripts
 
 | Task | Command |
 |------|---------|
-| Check status | `git status` |
-| Pull latest | `git pull` |
-| Stage all changes | `git add .` |
-| Commit | `git commit -m "message"` |
-| Push | `git push` |
-| View history | `git log --oneline` |
+| Activate venv (Mac/Linux) | `source venv/bin/activate` |
+| Activate venv (Windows) | `.\venv\Scripts\Activate.bat` |
+| Export DB objects to SQL files | `python scripts/export_db_objects.py --all` |
+| Run tests | `pytest` |
 
 ---
 
 ## Troubleshooting
 
-### Docker not starting
-- Make sure Docker Desktop is open and running
-- Try: `docker-compose down && docker-compose up -d`
+### PostgreSQL not starting
+- Make sure Docker Desktop is open
+- Try: `docker compose down && docker compose up postgres -d`
+- Check logs: `docker compose logs postgres`
 
-### Can't connect to database
-- Check container is running: `docker ps`
-- Check logs: `docker-compose logs postgres`
-- Verify port 5432 is not used by another app
+### PySpark can't connect to PostgreSQL
+- Verify the JDBC jar exists: `ls jars/postgresql-42.7.4.jar`
+- Confirm postgres is healthy: `docker compose ps`
+- The JDBC URL must use `postgres` (the service name), not `localhost`, when running inside Docker
+
+### dbt connection failed
+- Run `docker compose run --rm dbt dbt debug` to see the full error
+- Confirm `DB_HOST=postgres` is set (not `localhost`) — this is the default in `dbt/profiles.yml` when inside Docker
+- Verify postgres is running: `docker compose ps`
+
+### Can't connect via DBeaver
+- Use `localhost` (not `postgres`) as the host — DBeaver runs on your machine, not inside Docker
+- Verify port 5432 is not used by another app: `lsof -i :5432`
 
 ### Python venv won't activate (Windows)
-- Use `.\venv\Scripts\Activate.bat` instead
+- Use `.\venv\Scripts\Activate.bat` instead of the `.ps1` version
 - Or enable scripts: `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`
-- Or use Command Prompt instead of PowerShell
-
-### Permission denied (Git)
-- Make sure SSH key is added to GitHub: https://github.com/settings/keys
-- Test with: `ssh -T git@github.com`
 
 ### "Module not found" in Python
 - Make sure venv is activated (you should see `(venv)` in terminal)
 - Reinstall: `pip install -r requirements.txt`
 
----
-
-## Summary
-
-### Setup (One Time)
-1. Install prerequisites (Git, Docker, Python)
-2. Set up SSH key and add to GitHub
-3. Clone the repository
-4. Run `docker-compose up -d`
-5. Set up Python venv and install dependencies
-6. Connect your SQL IDE
-
-### Daily Workflow
-1. Start Docker: `docker-compose up -d`
-2. Activate venv: `source venv/bin/activate`
-3. Pull latest: `git pull`
-4. Do your work (write SQL in files or export from IDE)
-5. Commit and push: `git add . && git commit -m "message" && git push`
-
-### Remember
-- **Write SQL in files** → automatically tracked in Git
-- **Create in IDE** → must export with `python scripts/export_db_objects.py --all`
-- **Always commit** your `.sql` files to keep everything version controlled
+### Permission denied (Git)
+- Make sure SSH key is added to GitHub: https://github.com/settings/keys
+- Test with: `ssh -T git@github.com`
